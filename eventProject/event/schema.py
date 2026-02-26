@@ -1,15 +1,64 @@
 import graphene
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
+from django.utils.text import slugify
 from graphene_django import DjangoObjectType
+from .models import Category, EventTag, Country, State, City, Event
+
+# Types 
 
 class UserType(DjangoObjectType):
     class Meta:
         model = User
         fields = ('id', 'username', 'email', 'first_name', 'last_name')
 
-class SignupMutation(graphene.Mutation):
+class CategoryType(DjangoObjectType):
+    class Meta:
+        model = Category
+        fields = ('id', 'name', 'slug', 'isActive', 'created_at', 'updated_at')
 
+
+class EventTagType(DjangoObjectType):
+    class Meta:
+        model = EventTag
+        fields = ('id', 'name', 'slug', 'isActive', 'created_at', 'updated_at')
+
+
+
+class CountryType(DjangoObjectType):
+    class Meta:
+        model = Country
+        fields = ('id', 'name', 'slug', 'created_at', 'updated_at')
+
+
+class StateType(DjangoObjectType):
+    class Meta:
+        model = State
+        fields = ('id', 'name', 'slug', 'country', 'created_at', 'updated_at')
+
+
+class CityType(DjangoObjectType):
+    class Meta:
+        model = City
+        fields = ('id', 'name', 'slug', 'state', 'created_at', 'updated_at')
+
+
+class EventType(DjangoObjectType):
+    class Meta:
+        model = Event
+        fields = (
+            'id', 'title', 'slug', 'feature_image',
+            'category', 'tags', 'extraImages',
+            'country', 'state', 'city', 'venue',
+            'event_date', 'start_time', 'end_time',
+            'is_active', 'short_description', 'long_description',
+            'views_count', 'created_at', 'updated_at',
+        )
+
+
+# Auth Mutations 
+
+class SignupMutation(graphene.Mutation):
     class Arguments:
         username   = graphene.String(required=True)
         email      = graphene.String(required=True)
@@ -23,20 +72,19 @@ class SignupMutation(graphene.Mutation):
 
     def mutate(self, info, username, email, password, first_name='', last_name=''):
         if User.objects.filter(username=username).exists():
-            return SignupMutation(success=False, message='Username already taken.', user=None)
-
+            return SignupMutation(success=False, message='Username already exists.', user=None)
         if User.objects.filter(email=email).exists():
             return SignupMutation(success=False, message='Email already registered.', user=None)
-
-        user = User.objects.create_user(username=username, email=email, password=password, first_name=first_name, last_name=last_name)
-
+        user = User.objects.create_user(
+            username=username, email=email, password=password,
+            first_name=first_name, last_name=last_name
+        )
         return SignupMutation(success=True, message='User created successfully.', user=user)
 
 
 class LoginMutation(graphene.Mutation):
-
     class Arguments:
-        email = graphene.String(required=True)
+        email    = graphene.String(required=True)
         password = graphene.String(required=True)
 
     success = graphene.Boolean()
@@ -44,31 +92,562 @@ class LoginMutation(graphene.Mutation):
     user    = graphene.Field(UserType)
 
     def mutate(self, info, email, password):
-
         try:
             user_obj = User.objects.get(email=email)
         except User.DoesNotExist:
-            return LoginMutation(success=False, message='Invalid credentials.', user=None)
-
+            return LoginMutation(success=False, message='User with this email does not exist.', user=None)
         user = authenticate(request=info.context, username=user_obj.username, password=password)
         if user is None:
             return LoginMutation(success=False, message='Invalid credentials.', user=None)
-
         return LoginMutation(success=True, message='Login successful.', user=user)
 
+
+# Category Mutations 
+
+class CreateCategoryMutation(graphene.Mutation):
+    class Arguments:
+        name     = graphene.String(required=True)
+        is_active = graphene.Boolean()
+
+    success  = graphene.Boolean()
+    message  = graphene.String()
+    category = graphene.Field(CategoryType)
+
+    def mutate(self, info, name, is_active=True):
+        if Category.objects.filter(name=name).exists():
+            return CreateCategoryMutation(success=False, message='Category already exists.', category=None)
+        category = Category.objects.create(name=name, isActive=is_active)
+        return CreateCategoryMutation(success=True, message='Category created.', category=category)
+
+
+class UpdateCategoryMutation(graphene.Mutation):
+    class Arguments:
+        id        = graphene.ID(required=True)
+        name      = graphene.String()
+        slug      = graphene.String()
+        is_active = graphene.Boolean()
+
+    success  = graphene.Boolean()
+    message  = graphene.String()
+    category = graphene.Field(CategoryType)
+
+    def mutate(self, info, id, name=None, slug=None, is_active=None):
+        try:
+            category = Category.objects.get(pk=id)
+        except Category.DoesNotExist:
+            return UpdateCategoryMutation(success=False, message='Category not found.', category=None)
+        if name is not None:
+            if Category.objects.filter(name=name).exclude(pk=id).exists():
+                return UpdateCategoryMutation(success=False, message='Category name already taken.', category=None)
+            category.name = name
+            category.slug = slug if slug else slugify(name)
+        elif slug is not None:
+            category.slug = slug
+        if is_active is not None:
+            category.isActive = is_active
+        category.save()
+        return UpdateCategoryMutation(success=True, message='Category updated.', category=category)
+
+
+class DeleteCategoryMutation(graphene.Mutation):
+    class Arguments:
+        id = graphene.ID(required=True)
+
+    success = graphene.Boolean()
+    message = graphene.String()
+
+    def mutate(self, info, id):
+        try:
+            Category.objects.get(pk=id).delete()
+        except Category.DoesNotExist:
+            return DeleteCategoryMutation(success=False, message='Category not found.')
+        return DeleteCategoryMutation(success=True, message='Category deleted.')
+
+
+# EventTag Mutations
+
+class CreateTagMutation(graphene.Mutation):
+    class Arguments:
+        name      = graphene.String(required=True)
+        is_active = graphene.Boolean()
+
+    success   = graphene.Boolean()
+    message   = graphene.String()
+    event_tag = graphene.Field(EventTagType)
+
+    def mutate(self, info, name, is_active=True):
+        if EventTag.objects.filter(name=name).exists():
+            return CreateTagMutation(success=False, message='Tag already exists.', event_tag=None)
+        tag = EventTag.objects.create(name=name, isActive=is_active)
+        return CreateTagMutation(success=True, message='Tag created.', event_tag=tag)
+
+
+class UpdateTagMutation(graphene.Mutation):
+    class Arguments:
+        id        = graphene.ID(required=True)
+        name      = graphene.String()
+        slug      = graphene.String()
+        is_active = graphene.Boolean()
+
+    success   = graphene.Boolean()
+    message   = graphene.String()
+    event_tag = graphene.Field(EventTagType)
+
+    def mutate(self, info, id, name=None, slug=None, is_active=None):
+        try:
+            tag = EventTag.objects.get(pk=id)
+        except EventTag.DoesNotExist:
+            return UpdateTagMutation(success=False, message='Tag not found.', event_tag=None)
+        if name is not None:
+            if EventTag.objects.filter(name=name).exclude(pk=id).exists():
+                return UpdateTagMutation(success=False, message='Tag name already taken.', event_tag=None)
+            tag.name = name
+            tag.slug = slug if slug else slugify(name)
+        elif slug is not None:
+            tag.slug = slug
+        if is_active is not None:
+            tag.isActive = is_active
+        tag.save()
+        return UpdateTagMutation(success=True, message='Tag updated.', event_tag=tag)
+
+
+class DeleteTagMutation(graphene.Mutation):
+    class Arguments:
+        id = graphene.ID(required=True)
+
+    success = graphene.Boolean()
+    message = graphene.String()
+
+    def mutate(self, info, id):
+        try:
+            EventTag.objects.get(pk=id).delete()
+        except EventTag.DoesNotExist:
+            return DeleteTagMutation(success=False, message='Tag not found.')
+        return DeleteTagMutation(success=True, message='Tag deleted.')
+
+
+# Country Mutations 
+
+class CreateCountryMutation(graphene.Mutation):
+    class Arguments:
+        name = graphene.String(required=True)
+
+    success = graphene.Boolean()
+    message = graphene.String()
+    country = graphene.Field(CountryType)
+
+    def mutate(self, info, name):
+        if Country.objects.filter(name=name).exists():
+            return CreateCountryMutation(success=False, message='Country already exists.', country=None)
+        country = Country.objects.create(name=name)
+        return CreateCountryMutation(success=True, message='Country created.', country=country)
+
+
+class UpdateCountryMutation(graphene.Mutation):
+    class Arguments:
+        id   = graphene.ID(required=True)
+        name = graphene.String()
+        slug = graphene.String()
+
+    success = graphene.Boolean()
+    message = graphene.String()
+    country = graphene.Field(CountryType)
+
+    def mutate(self, info, id, name=None, slug=None):
+        try:
+            country = Country.objects.get(pk=id)
+        except Country.DoesNotExist:
+            return UpdateCountryMutation(success=False, message='Country not found.', country=None)
+        if name is not None:
+            if Country.objects.filter(name=name).exclude(pk=id).exists():
+                return UpdateCountryMutation(success=False, message='Country name already taken.', country=None)
+            country.name = name
+            country.slug = slug if slug else slugify(name)
+        elif slug is not None:
+            country.slug = slug
+        country.save()
+        return UpdateCountryMutation(success=True, message='Country updated.', country=country)
+
+
+class DeleteCountryMutation(graphene.Mutation):
+    class Arguments:
+        id = graphene.ID(required=True)
+
+    success = graphene.Boolean()
+    message = graphene.String()
+
+    def mutate(self, info, id):
+        try:
+            Country.objects.get(pk=id).delete()
+        except Country.DoesNotExist:
+            return DeleteCountryMutation(success=False, message='Country not found.')
+        return DeleteCountryMutation(success=True, message='Country deleted.')
+
+
+# State Mutations
+
+class CreateStateMutation(graphene.Mutation):
+    class Arguments:
+        name       = graphene.String(required=True)
+        country_id = graphene.ID(required=True)
+
+    success = graphene.Boolean()
+    message = graphene.String()
+    state   = graphene.Field(StateType)
+
+    def mutate(self, info, name, country_id):
+        try:
+            country = Country.objects.get(pk=country_id)
+        except Country.DoesNotExist:
+            return CreateStateMutation(success=False, message='Country not found.', state=None)
+        state = State.objects.create(name=name, country=country)
+        return CreateStateMutation(success=True, message='State created.', state=state)
+
+
+class UpdateStateMutation(graphene.Mutation):
+    class Arguments:
+        id         = graphene.ID(required=True)
+        name       = graphene.String()
+        slug       = graphene.String()
+        country_id = graphene.ID()
+
+    success = graphene.Boolean()
+    message = graphene.String()
+    state   = graphene.Field(StateType)
+
+    def mutate(self, info, id, name=None, slug=None, country_id=None):
+        try:
+            state = State.objects.get(pk=id)
+        except State.DoesNotExist:
+            return UpdateStateMutation(success=False, message='State not found.', state=None)
+        if name is not None:
+            state.name = name
+            state.slug = slug if slug else slugify(name)
+        elif slug is not None:
+            state.slug = slug
+        if country_id is not None:
+            try:
+                state.country = Country.objects.get(pk=country_id)
+            except Country.DoesNotExist:
+                return UpdateStateMutation(success=False, message='Country not found.', state=None)
+        state.save()
+        return UpdateStateMutation(success=True, message='State updated.', state=state)
+
+
+class DeleteStateMutation(graphene.Mutation):
+    class Arguments:
+        id = graphene.ID(required=True)
+
+    success = graphene.Boolean()
+    message = graphene.String()
+
+    def mutate(self, info, id):
+        try:
+            State.objects.get(pk=id).delete()
+        except State.DoesNotExist:
+            return DeleteStateMutation(success=False, message='State not found.')
+        return DeleteStateMutation(success=True, message='State deleted.')
+
+
+# City Mutations
+
+class CreateCityMutation(graphene.Mutation):
+    class Arguments:
+        name     = graphene.String(required=True)
+        state_id = graphene.ID(required=True)
+
+    success = graphene.Boolean()
+    message = graphene.String()
+    city    = graphene.Field(CityType)
+
+    def mutate(self, info, name, state_id):
+        try:
+            state = State.objects.get(pk=state_id)
+        except State.DoesNotExist:
+            return CreateCityMutation(success=False, message='State not found.', city=None)
+        city = City.objects.create(name=name, state=state)
+        return CreateCityMutation(success=True, message='City created.', city=city)
+
+
+class UpdateCityMutation(graphene.Mutation):
+    class Arguments:
+        id       = graphene.ID(required=True)
+        name     = graphene.String()
+        slug     = graphene.String()
+        state_id = graphene.ID()
+
+    success = graphene.Boolean()
+    message = graphene.String()
+    city    = graphene.Field(CityType)
+
+    def mutate(self, info, id, name=None, slug=None, state_id=None):
+        try:
+            city = City.objects.get(pk=id)
+        except City.DoesNotExist:
+            return UpdateCityMutation(success=False, message='City not found.', city=None)
+        if name is not None:
+            city.name = name
+            city.slug = slug if slug else slugify(name)
+        elif slug is not None:
+            city.slug = slug
+        if state_id is not None:
+            try:
+                city.state = State.objects.get(pk=state_id)
+            except State.DoesNotExist:
+                return UpdateCityMutation(success=False, message='State not found.', city=None)
+        city.save()
+        return UpdateCityMutation(success=True, message='City updated.', city=city)
+
+
+class DeleteCityMutation(graphene.Mutation):
+    class Arguments:
+        id = graphene.ID(required=True)
+
+    success = graphene.Boolean()
+    message = graphene.String()
+
+    def mutate(self, info, id):
+        try:
+            City.objects.get(pk=id).delete()
+        except City.DoesNotExist:
+            return DeleteCityMutation(success=False, message='City not found.')
+        return DeleteCityMutation(success=True, message='City deleted.')
+
+
+# Event Mutations
+
+class CreateEventMutation(graphene.Mutation):
+    class Arguments:
+        title             = graphene.String(required=True)
+        country_id        = graphene.ID(required=True)
+        state_id          = graphene.ID(required=True)
+        city_id           = graphene.ID(required=True)
+        venue             = graphene.String(required=True)
+        event_date        = graphene.Date(required=True)
+        start_time        = graphene.Time(required=True)
+        end_time          = graphene.Time(required=True)
+        short_description = graphene.String(required=True)
+        long_description  = graphene.String(required=True)
+        category_ids      = graphene.List(graphene.ID)
+        tag_ids           = graphene.List(graphene.ID)
+        is_active         = graphene.Boolean()
+
+    success = graphene.Boolean()
+    message = graphene.String()
+    event   = graphene.Field(EventType)
+
+    def mutate(self, info, title, country_id, state_id, city_id,
+               venue, event_date, start_time, end_time,
+               short_description, long_description,
+               category_ids=None, tag_ids=None, is_active=True):
+        try:
+            country = Country.objects.get(pk=country_id)
+            state   = State.objects.get(pk=state_id)
+            city    = City.objects.get(pk=city_id)
+        except (Country.DoesNotExist, State.DoesNotExist, City.DoesNotExist) as e:
+            return CreateEventMutation(success=False, message=str(e), event=None)
+        event = Event.objects.create(
+            title=title, country=country, state=state, city=city,
+            venue=venue, event_date=event_date, start_time=start_time, end_time=end_time,
+            short_description=short_description, long_description=long_description,
+            is_active=is_active,
+        )
+        if category_ids:
+            event.category.set(Category.objects.filter(pk__in=category_ids))
+        if tag_ids:
+            event.tags.set(EventTag.objects.filter(pk__in=tag_ids))
+
+        return CreateEventMutation(success=True, message='Event created.', event=event)
+
+class DeleteEventMutation(graphene.Mutation):
+    class Arguments:
+        id = graphene.ID(required=True)
+
+    success = graphene.Boolean()
+    message = graphene.String()
+
+    def mutate(self, info, id):
+        try:
+            Event.objects.get(pk=id).delete()
+        except Event.DoesNotExist:
+            return DeleteEventMutation(success=False, message='Event not found.')
+        return DeleteEventMutation(success=True, message='Event deleted.')
+
+
+# Mutation
+
 class Mutation(graphene.ObjectType):
+    # auth
     signup = SignupMutation.Field()
     login  = LoginMutation.Field()
+    # category
+    create_category = CreateCategoryMutation.Field()
+    update_category = UpdateCategoryMutation.Field()
+    delete_category = DeleteCategoryMutation.Field()
+    # event tag
+    create_tag = CreateTagMutation.Field()
+    update_tag = UpdateTagMutation.Field()
+    delete_tag = DeleteTagMutation.Field()
+    # country
+    create_country = CreateCountryMutation.Field()
+    update_country = UpdateCountryMutation.Field()
+    delete_country = DeleteCountryMutation.Field()
+    # state
+    create_state = CreateStateMutation.Field()
+    update_state = UpdateStateMutation.Field()
+    delete_state = DeleteStateMutation.Field()
+    # city
+    create_city = CreateCityMutation.Field()
+    update_city = UpdateCityMutation.Field()
+    delete_city = DeleteCityMutation.Field()
+    # event
+    create_event = CreateEventMutation.Field()
+    delete_event = DeleteEventMutation.Field()
 
 
+# Query
 
 class Query(graphene.ObjectType):
+    # users
     all_users = graphene.List(UserType)
 
+    # categories
+    all_categories  = graphene.List(CategoryType)
+    category_by_id  = graphene.Field(CategoryType, id=graphene.ID(required=True))
+    category_by_slug = graphene.Field(CategoryType, slug=graphene.String(required=True))
+
+    # event tags
+    all_event_tags   = graphene.List(EventTagType)
+    event_tag_by_id  = graphene.Field(EventTagType, id=graphene.ID(required=True))
+    event_tag_by_slug = graphene.Field(EventTagType, slug=graphene.String(required=True))
+
+    # countries
+    all_countries   = graphene.List(CountryType)
+    country_by_id   = graphene.Field(CountryType, id=graphene.ID(required=True))
+    country_by_slug = graphene.Field(CountryType, slug=graphene.String(required=True))
+
+    # states
+    all_states      = graphene.List(StateType)
+    state_by_id     = graphene.Field(StateType, id=graphene.ID(required=True))
+    states_by_country = graphene.List(StateType, country_id=graphene.ID(required=True))
+
+    # cities
+    all_cities      = graphene.List(CityType)
+    city_by_id      = graphene.Field(CityType, id=graphene.ID(required=True))
+    cities_by_state = graphene.List(CityType, state_id=graphene.ID(required=True))
+
+    # events
+    all_events         = graphene.List(EventType)
+    event_by_id        = graphene.Field(EventType, id=graphene.ID(required=True))
+    event_by_slug      = graphene.Field(EventType, slug=graphene.String(required=True))
+    events_by_category = graphene.List(EventType, category_id=graphene.ID(required=True))
+    events_by_tag      = graphene.List(EventType, tag_id=graphene.ID(required=True))
+    active_events      = graphene.List(EventType)
+
+    # resolvers
+
     def resolve_all_users(self, info):
-        
         return User.objects.all()
-        
+
+    def resolve_all_categories(self, info):
+        return Category.objects.all()
+
+    def resolve_category_by_id(self, info, id):
+        try:
+            return Category.objects.get(pk=id)
+        except Category.DoesNotExist:
+            return None
+
+    def resolve_category_by_slug(self, info, slug):
+        try:
+            return Category.objects.get(slug=slug)
+        except Category.DoesNotExist:
+            return None
+
+    def resolve_all_event_tags(self, info):
+        return EventTag.objects.all()
+
+    def resolve_event_tag_by_id(self, info, id):
+        try:
+            return EventTag.objects.get(pk=id)
+        except EventTag.DoesNotExist:
+            return None
+
+    def resolve_event_tag_by_slug(self, info, slug):
+        try:
+            return EventTag.objects.get(slug=slug)
+        except EventTag.DoesNotExist:
+            return None
+
+    def resolve_all_countries(self, info):
+        return Country.objects.all()
+
+    def resolve_country_by_id(self, info, id):
+        try:
+            return Country.objects.get(pk=id)
+        except Country.DoesNotExist:
+            return None
+
+    def resolve_country_by_slug(self, info, slug):
+        try:
+            return Country.objects.get(slug=slug)
+        except Country.DoesNotExist:
+            return None
+
+    def resolve_all_states(self, info):
+        return State.objects.all()
+
+    def resolve_state_by_id(self, info, id):
+        try:
+            return State.objects.get(pk=id)
+        except State.DoesNotExist:
+            return None
+
+    def resolve_states_by_country(self, info, country_id):
+        return State.objects.filter(country_id=country_id)
+
+    def resolve_all_cities(self, info):
+        return City.objects.all()
+
+    def resolve_city_by_id(self, info, id):
+        try:
+            return City.objects.get(pk=id)
+        except City.DoesNotExist:
+            return None
+
+    def resolve_cities_by_state(self, info, state_id):
+        return City.objects.filter(state_id=state_id)
+
+    def resolve_all_events(self, info):
+        return Event.objects.all()
+
+    def resolve_event_by_id(self, info, id):
+        try:
+            event = Event.objects.get(pk=id)
+            event.views_count += 1
+            event.save()
+            return event
+        except Event.DoesNotExist:
+            return None
+
+    def resolve_event_by_slug(self, info, slug):
+        try:
+            event = Event.objects.get(slug=slug)
+            event.views_count += 1
+            event.save()
+
+            return event
+        except Event.DoesNotExist:
+            return None
+
+    def resolve_events_by_category(self, info, category_id):
+        return Event.objects.filter(category__id=category_id)
+
+    def resolve_events_by_tag(self, info, tag_id):
+        return Event.objects.filter(tags__id=tag_id)
+
+    def resolve_active_events(self, info):
+        return Event.objects.filter(is_active=True)
+
 
 schema = graphene.Schema(query=Query, mutation=Mutation)
-
