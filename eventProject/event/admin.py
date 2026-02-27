@@ -34,5 +34,11 @@ class CityAdmin(admin.ModelAdmin):
     search_fields = ['name', 'slug', 'state__name']
     list_filter = ['state__country', 'state']
 
-admin.site.register(Event)
+@admin.register(Event)
+class EventAdmin(admin.ModelAdmin):
+    list_display = ['title', 'slug', 'is_active', 'country', 'state', 'city', 'event_date', 'created_at', 'updated_at']
+    readonly_fields = ['slug', 'created_at', 'updated_at']
+    search_fields = ['title', 'slug', 'venue']
+    list_filter = ['is_active', 'category', 'country', 'state', 'city', 'event_date']
+
 admin.site.register(EventImages)
