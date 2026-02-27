@@ -9,7 +9,7 @@ from graphql_jwt.refresh_token.shortcuts import create_refresh_token
 from graphql_jwt.refresh_token.models import RefreshToken
 from graphql_jwt.utils import get_payload, get_user_by_payload
 from graphql_jwt.exceptions import JSONWebTokenError
-from .models import Category, EventTag, Country, State, City, Event, UserToken
+from .models import Category, EventTag, Country, State, City, Event, UserToken, EventImages
 
 
 def admin_required(info):
@@ -82,17 +82,43 @@ class CityType(DjangoObjectType):
         fields = ('id', 'name', 'slug', 'state', 'created_at', 'updated_at')
 
 
+class EventImagesType(DjangoObjectType):
+    image = graphene.String()
+
+    class Meta:
+        model = EventImages
+        fields = ('id', 'image', 'created_at', 'updated_at')
+
+    def resolve_image(self, info):
+        if not self.image:
+            return None
+        request = info.context
+        return request.build_absolute_uri(f'/media/{self.image.name}')
+
+
 class EventType(DjangoObjectType):
+    feature_image = graphene.String()
+    extra_images  = graphene.List(EventImagesType)
+
     class Meta:
         model = Event
         fields = (
-            'id', 'title', 'slug', 'feature_image',
-            'category', 'tags', 'extraImages',
+            'id', 'title', 'slug',
+            'category', 'tags',
             'country', 'state', 'city', 'venue',
             'event_date', 'start_time', 'end_time',
             'is_active', 'short_description', 'long_description',
             'views_count', 'created_at', 'updated_at',
         )
+
+    def resolve_feature_image(self, info):
+        if not self.feature_image:
+            return None
+        request = info.context
+        return request.build_absolute_uri(f'/media/{self.feature_image.name}')
+
+    def resolve_extra_images(self, info):
+        return self.extraImages.all()
 
 
 # Auth Mutations 
@@ -737,7 +763,7 @@ class Query(graphene.ObjectType):
         return City.objects.filter(state_id=state_id)
 
     def resolve_all_events(self, info):
-        return Event.objects.all()
+        return Event.objects.all().order_by('id')
 
     def resolve_event_by_id(self, info, id):
         try:
