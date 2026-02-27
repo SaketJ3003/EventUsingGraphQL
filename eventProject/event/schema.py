@@ -1,9 +1,48 @@
 import graphene
+import graphql_jwt
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
 from django.utils.text import slugify
 from graphene_django import DjangoObjectType
-from .models import Category, EventTag, Country, State, City, Event
+from graphql_jwt.shortcuts import get_token
+from graphql_jwt.refresh_token.shortcuts import create_refresh_token
+from graphql_jwt.refresh_token.models import RefreshToken
+from graphql_jwt.utils import get_payload, get_user_by_payload
+from graphql_jwt.exceptions import JSONWebTokenError
+from .models import Category, EventTag, Country, State, City, Event, UserToken
+
+
+def admin_required(info):
+
+    request = info.context
+    # print('Request:', request.META)
+    auth_header = request.META.get('HTTP_AUTHORIZATION', '')
+    # print("auth: ", auth_header)
+    if not auth_header.startswith('JWT '):
+        raise Exception(
+            "Authentication required. "
+            "Please provide a valid JWT token in the Authorization header."
+        )
+    token = auth_header[4:]
+    try:
+        payload = get_payload(token, request)
+        user    = get_user_by_payload(payload)
+        # print(payload)
+        # print("----------------------------------------------")
+        # print(user)
+    except JSONWebTokenError as e:
+        raise Exception(f"Invalid or expired token: {e}")
+    if not user or not user.is_active:
+        raise Exception("User not found or inactive.")
+
+    try:
+        stored = UserToken.objects.get(user=user)
+    except UserToken.DoesNotExist:
+        raise Exception("No active session found. Please log in.")
+    if stored.access_token != token:
+        raise Exception("Token has been invalidated. Please log in again.")
+    if not (user.is_staff or user.is_superuser):
+        raise Exception("Admin access required. Only admins can perform this action.")
 
 # Types 
 
@@ -87,20 +126,65 @@ class LoginMutation(graphene.Mutation):
         email    = graphene.String(required=True)
         password = graphene.String(required=True)
 
-    success = graphene.Boolean()
-    message = graphene.String()
-    user    = graphene.Field(UserType)
+    success       = graphene.Boolean()
+    message       = graphene.String()
+    user          = graphene.Field(UserType)
+    access_token  = graphene.String()
+    refresh_token = graphene.String()
 
     def mutate(self, info, email, password):
         try:
             user_obj = User.objects.get(email=email)
         except User.DoesNotExist:
-            return LoginMutation(success=False, message='User with this email does not exist.', user=None)
+            return LoginMutation(success=False, message='User with this email does not exist.',
+                                 user=None, access_token=None, refresh_token=None)
         user = authenticate(request=info.context, username=user_obj.username, password=password)
         if user is None:
-            return LoginMutation(success=False, message='Invalid credentials.', user=None)
-        return LoginMutation(success=True, message='Login successful.', user=user)
+            return LoginMutation(success=False, message='Invalid credentials.',
+                                 user=None, access_token=None, refresh_token=None)
 
+        RefreshToken.objects.filter(user=user).delete()
+        access_token = get_token(user)
+        refresh = create_refresh_token(user)
+
+        UserToken.objects.update_or_create(
+            user=user,
+            defaults={'access_token': access_token, 'refresh_token': str(refresh.token)}
+        )
+        return LoginMutation(success=True, message='Login successful.',
+                             user=user, access_token=access_token, refresh_token=str(refresh.token))
+
+
+class RefreshAccessTokenMutation(graphene.Mutation):
+    class Arguments:
+        refresh_token = graphene.String(required=True)
+
+    success      = graphene.Boolean()
+    message      = graphene.String()
+    access_token = graphene.String()
+
+    def mutate(self, info, refresh_token):
+        try:
+            token_obj = RefreshToken.objects.get(token=refresh_token)
+        except RefreshToken.DoesNotExist:
+            return RefreshAccessTokenMutation(success=False,
+                                             message='Invalid refresh token.',
+                                             access_token=None)
+        if token_obj.revoked:
+            return RefreshAccessTokenMutation(success=False,
+                                             message='Refresh token has been revoked. Please log in again.',
+                                             access_token=None)
+        user = token_obj.user
+
+        new_access_token = get_token(user)
+
+        UserToken.objects.update_or_create(
+            user=user,
+            defaults={'access_token': new_access_token, 'refresh_token': refresh_token}
+        )
+        return RefreshAccessTokenMutation(success=True,
+                                         message='Access token refreshed successfully.',
+                                         access_token=new_access_token)
 
 # Category Mutations 
 
@@ -114,6 +198,7 @@ class CreateCategoryMutation(graphene.Mutation):
     category = graphene.Field(CategoryType)
 
     def mutate(self, info, name, is_active=True):
+        admin_required(info)
         if Category.objects.filter(name=name).exists():
             return CreateCategoryMutation(success=False, message='Category already exists.', category=None)
         category = Category.objects.create(name=name, isActive=is_active)
@@ -132,6 +217,7 @@ class UpdateCategoryMutation(graphene.Mutation):
     category = graphene.Field(CategoryType)
 
     def mutate(self, info, id, name=None, slug=None, is_active=None):
+        admin_required(info)
         try:
             category = Category.objects.get(pk=id)
         except Category.DoesNotExist:
@@ -157,6 +243,7 @@ class DeleteCategoryMutation(graphene.Mutation):
     message = graphene.String()
 
     def mutate(self, info, id):
+        admin_required(info)
         try:
             Category.objects.get(pk=id).delete()
         except Category.DoesNotExist:
@@ -176,6 +263,7 @@ class CreateTagMutation(graphene.Mutation):
     event_tag = graphene.Field(EventTagType)
 
     def mutate(self, info, name, is_active=True):
+        admin_required(info)
         if EventTag.objects.filter(name=name).exists():
             return CreateTagMutation(success=False, message='Tag already exists.', event_tag=None)
         tag = EventTag.objects.create(name=name, isActive=is_active)
@@ -194,6 +282,7 @@ class UpdateTagMutation(graphene.Mutation):
     event_tag = graphene.Field(EventTagType)
 
     def mutate(self, info, id, name=None, slug=None, is_active=None):
+        admin_required(info)
         try:
             tag = EventTag.objects.get(pk=id)
         except EventTag.DoesNotExist:
@@ -219,6 +308,7 @@ class DeleteTagMutation(graphene.Mutation):
     message = graphene.String()
 
     def mutate(self, info, id):
+        admin_required(info)
         try:
             EventTag.objects.get(pk=id).delete()
         except EventTag.DoesNotExist:
@@ -237,6 +327,7 @@ class CreateCountryMutation(graphene.Mutation):
     country = graphene.Field(CountryType)
 
     def mutate(self, info, name):
+        admin_required(info)
         if Country.objects.filter(name=name).exists():
             return CreateCountryMutation(success=False, message='Country already exists.', country=None)
         country = Country.objects.create(name=name)
@@ -254,6 +345,7 @@ class UpdateCountryMutation(graphene.Mutation):
     country = graphene.Field(CountryType)
 
     def mutate(self, info, id, name=None, slug=None):
+        admin_required(info)
         try:
             country = Country.objects.get(pk=id)
         except Country.DoesNotExist:
@@ -277,6 +369,7 @@ class DeleteCountryMutation(graphene.Mutation):
     message = graphene.String()
 
     def mutate(self, info, id):
+        admin_required(info)
         try:
             Country.objects.get(pk=id).delete()
         except Country.DoesNotExist:
@@ -296,6 +389,7 @@ class CreateStateMutation(graphene.Mutation):
     state   = graphene.Field(StateType)
 
     def mutate(self, info, name, country_id):
+        admin_required(info)
         try:
             country = Country.objects.get(pk=country_id)
         except Country.DoesNotExist:
@@ -316,6 +410,7 @@ class UpdateStateMutation(graphene.Mutation):
     state   = graphene.Field(StateType)
 
     def mutate(self, info, id, name=None, slug=None, country_id=None):
+        admin_required(info)
         try:
             state = State.objects.get(pk=id)
         except State.DoesNotExist:
@@ -342,6 +437,7 @@ class DeleteStateMutation(graphene.Mutation):
     message = graphene.String()
 
     def mutate(self, info, id):
+        admin_required(info)
         try:
             State.objects.get(pk=id).delete()
         except State.DoesNotExist:
@@ -361,6 +457,7 @@ class CreateCityMutation(graphene.Mutation):
     city    = graphene.Field(CityType)
 
     def mutate(self, info, name, state_id):
+        admin_required(info)
         try:
             state = State.objects.get(pk=state_id)
         except State.DoesNotExist:
@@ -381,6 +478,7 @@ class UpdateCityMutation(graphene.Mutation):
     city    = graphene.Field(CityType)
 
     def mutate(self, info, id, name=None, slug=None, state_id=None):
+        admin_required(info)
         try:
             city = City.objects.get(pk=id)
         except City.DoesNotExist:
@@ -407,6 +505,7 @@ class DeleteCityMutation(graphene.Mutation):
     message = graphene.String()
 
     def mutate(self, info, id):
+        admin_required(info)
         try:
             City.objects.get(pk=id).delete()
         except City.DoesNotExist:
@@ -440,6 +539,7 @@ class CreateEventMutation(graphene.Mutation):
                venue, event_date, start_time, end_time,
                short_description, long_description,
                category_ids=None, tag_ids=None, is_active=True):
+        admin_required(info)
         try:
             country = Country.objects.get(pk=country_id)
             state   = State.objects.get(pk=state_id)
@@ -467,6 +567,7 @@ class DeleteEventMutation(graphene.Mutation):
     message = graphene.String()
 
     def mutate(self, info, id):
+        admin_required(info)
         try:
             Event.objects.get(pk=id).delete()
         except Event.DoesNotExist:
@@ -478,8 +579,9 @@ class DeleteEventMutation(graphene.Mutation):
 
 class Mutation(graphene.ObjectType):
     # auth
-    signup = SignupMutation.Field()
-    login  = LoginMutation.Field()
+    signup               = SignupMutation.Field()
+    login                = LoginMutation.Field()
+    refresh_access_token = RefreshAccessTokenMutation.Field()
     # category
     create_category = CreateCategoryMutation.Field()
     update_category = UpdateCategoryMutation.Field()
@@ -547,75 +649,91 @@ class Query(graphene.ObjectType):
     # resolvers
 
     def resolve_all_users(self, info):
+        admin_required(info)
         return User.objects.all()
 
     def resolve_all_categories(self, info):
+        admin_required(info)
         return Category.objects.all()
 
     def resolve_category_by_id(self, info, id):
+        admin_required(info)
         try:
             return Category.objects.get(pk=id)
         except Category.DoesNotExist:
             return None
 
     def resolve_category_by_slug(self, info, slug):
+        admin_required(info)
         try:
             return Category.objects.get(slug=slug)
         except Category.DoesNotExist:
             return None
 
     def resolve_all_event_tags(self, info):
+        admin_required(info)
         return EventTag.objects.all()
 
     def resolve_event_tag_by_id(self, info, id):
+        admin_required(info)
         try:
             return EventTag.objects.get(pk=id)
         except EventTag.DoesNotExist:
             return None
 
     def resolve_event_tag_by_slug(self, info, slug):
+        admin_required(info)
         try:
             return EventTag.objects.get(slug=slug)
         except EventTag.DoesNotExist:
             return None
 
     def resolve_all_countries(self, info):
+        admin_required(info)
         return Country.objects.all()
 
     def resolve_country_by_id(self, info, id):
+        admin_required(info)
         try:
             return Country.objects.get(pk=id)
         except Country.DoesNotExist:
             return None
 
     def resolve_country_by_slug(self, info, slug):
+        admin_required(info)
         try:
             return Country.objects.get(slug=slug)
         except Country.DoesNotExist:
             return None
 
     def resolve_all_states(self, info):
+        admin_required(info)
         return State.objects.all()
 
     def resolve_state_by_id(self, info, id):
+        admin_required(info)
         try:
             return State.objects.get(pk=id)
         except State.DoesNotExist:
             return None
 
     def resolve_states_by_country(self, info, country_id):
+        admin_required(info)
         return State.objects.filter(country_id=country_id)
 
     def resolve_all_cities(self, info):
+        admin_required(info)
         return City.objects.all()
 
     def resolve_city_by_id(self, info, id):
+        admin_required(info)
         try:
             return City.objects.get(pk=id)
         except City.DoesNotExist:
             return None
 
     def resolve_cities_by_state(self, info, state_id):
+        admin_required(info)
         return City.objects.filter(state_id=state_id)
 
     def resolve_all_events(self, info):
