@@ -39,6 +39,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'event',
+    'admin_panel',
     'graphene_django',
     'graphql_jwt.refresh_token',
 ]

@@ -2,6 +2,7 @@ import graphene
 import graphql_jwt
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
+from django.core.paginator import Paginator
 from django.utils.text import slugify
 from graphene_django import DjangoObjectType
 from graphql_jwt.shortcuts import get_token
@@ -49,7 +50,7 @@ def admin_required(info):
 class UserType(DjangoObjectType):
     class Meta:
         model = User
-        fields = ('id', 'username', 'email', 'first_name', 'last_name')
+        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'is_staff', 'is_superuser')
 
 class CategoryType(DjangoObjectType):
     class Meta:
@@ -585,6 +586,78 @@ class CreateEventMutation(graphene.Mutation):
 
         return CreateEventMutation(success=True, message='Event created.', event=event)
 
+class UpdateEventMutation(graphene.Mutation):
+    class Arguments:
+        id                = graphene.ID(required=True)
+        title             = graphene.String()
+        country_id        = graphene.ID()
+        state_id          = graphene.ID()
+        city_id           = graphene.ID()
+        venue             = graphene.String()
+        event_date        = graphene.Date()
+        start_time        = graphene.Time()
+        end_time          = graphene.Time()
+        short_description = graphene.String()
+        long_description  = graphene.String()
+        category_ids      = graphene.List(graphene.ID)
+        tag_ids           = graphene.List(graphene.ID)
+        is_active         = graphene.Boolean()
+        remove_feature_image    = graphene.Boolean()
+        remove_extra_image_ids  = graphene.List(graphene.ID)
+
+    success = graphene.Boolean()
+    message = graphene.String()
+    event   = graphene.Field(EventType)
+
+    def mutate(self, info, id, title=None, country_id=None, state_id=None, city_id=None,
+               venue=None, event_date=None, start_time=None, end_time=None,
+               short_description=None, long_description=None,
+               category_ids=None, tag_ids=None, is_active=None,
+               remove_feature_image=False, remove_extra_image_ids=None):
+        admin_required(info)
+        try:
+            event = Event.objects.get(pk=id)
+        except Event.DoesNotExist:
+            return UpdateEventMutation(success=False, message='Event not found.', event=None)
+        if title is not None:
+            event.title = title
+            base_slug = slugify(title)
+            slug = base_slug
+            counter = 2
+            while Event.objects.filter(slug=slug).exclude(pk=event.pk).exists():
+                slug = f"{base_slug}-{counter}"
+                counter += 1
+            event.slug = slug
+        if venue             is not None: event.venue             = venue
+        if event_date        is not None: event.event_date        = event_date
+        if start_time        is not None: event.start_time        = start_time
+        if end_time          is not None: event.end_time          = end_time
+        if short_description is not None: event.short_description = short_description
+        if long_description  is not None: event.long_description  = long_description
+        if is_active         is not None: event.is_active         = is_active
+        if country_id is not None:
+            try:    event.country = Country.objects.get(pk=country_id)
+            except Country.DoesNotExist: pass
+        if state_id is not None:
+            try:    event.state = State.objects.get(pk=state_id)
+            except State.DoesNotExist: pass
+        if city_id is not None:
+            try:    event.city = City.objects.get(pk=city_id)
+            except City.DoesNotExist: pass
+        if remove_feature_image:
+            if event.feature_image:
+                event.feature_image.delete(save=False)
+            event.feature_image = None
+        event.save()
+        if category_ids is not None:
+            event.category.set(Category.objects.filter(pk__in=category_ids))
+        if tag_ids is not None:
+            event.tags.set(EventTag.objects.filter(pk__in=tag_ids))
+        if remove_extra_image_ids:
+            event.extraImages.filter(pk__in=remove_extra_image_ids).delete()
+        return UpdateEventMutation(success=True, message='Event updated.', event=event)
+
+
 class DeleteEventMutation(graphene.Mutation):
     class Arguments:
         id = graphene.ID(required=True)
@@ -599,6 +672,43 @@ class DeleteEventMutation(graphene.Mutation):
         except Event.DoesNotExist:
             return DeleteEventMutation(success=False, message='Event not found.')
         return DeleteEventMutation(success=True, message='Event deleted.')
+
+
+class PaginatedCategoryResult(graphene.ObjectType):
+    results      = graphene.List(CategoryType)
+    total_count  = graphene.Int()
+    num_pages    = graphene.Int()
+    current_page = graphene.Int()
+
+class PaginatedTagResult(graphene.ObjectType):
+    results      = graphene.List(EventTagType)
+    total_count  = graphene.Int()
+    num_pages    = graphene.Int()
+    current_page = graphene.Int()
+
+class PaginatedCountryResult(graphene.ObjectType):
+    results      = graphene.List(CountryType)
+    total_count  = graphene.Int()
+    num_pages    = graphene.Int()
+    current_page = graphene.Int()
+
+class PaginatedStateResult(graphene.ObjectType):
+    results      = graphene.List(StateType)
+    total_count  = graphene.Int()
+    num_pages    = graphene.Int()
+    current_page = graphene.Int()
+
+class PaginatedCityResult(graphene.ObjectType):
+    results      = graphene.List(CityType)
+    total_count  = graphene.Int()
+    num_pages    = graphene.Int()
+    current_page = graphene.Int()
+
+class PaginatedEventResult(graphene.ObjectType):
+    results      = graphene.List(EventType)
+    total_count  = graphene.Int()
+    num_pages    = graphene.Int()
+    current_page = graphene.Int()
 
 
 # Mutation
@@ -630,12 +740,15 @@ class Mutation(graphene.ObjectType):
     delete_city = DeleteCityMutation.Field()
     # event
     create_event = CreateEventMutation.Field()
+    update_event = UpdateEventMutation.Field()
     delete_event = DeleteEventMutation.Field()
 
 
 # Query
 
 class Query(graphene.ObjectType):
+    me = graphene.Field(UserType)
+
     # users
     all_users = graphene.List(UserType)
 
@@ -672,7 +785,33 @@ class Query(graphene.ObjectType):
     events_by_tag      = graphene.List(EventType, tag_id=graphene.ID(required=True))
     active_events      = graphene.List(EventType)
 
+    # paginated queries
+    paginated_categories = graphene.Field(PaginatedCategoryResult, page=graphene.Int(), page_size=graphene.Int(), search=graphene.String())
+    paginated_tags       = graphene.Field(PaginatedTagResult,       page=graphene.Int(), page_size=graphene.Int(), search=graphene.String())
+    paginated_countries  = graphene.Field(PaginatedCountryResult,   page=graphene.Int(), page_size=graphene.Int(), search=graphene.String())
+    paginated_states     = graphene.Field(PaginatedStateResult,     page=graphene.Int(), page_size=graphene.Int(), search=graphene.String(), country_id=graphene.ID())
+    paginated_cities     = graphene.Field(PaginatedCityResult,      page=graphene.Int(), page_size=graphene.Int(), search=graphene.String(), state_id=graphene.ID(), country_id=graphene.ID())
+    paginated_events        = graphene.Field(PaginatedEventResult, page=graphene.Int(), page_size=graphene.Int(), search=graphene.String(), category_id=graphene.ID(), tag_id=graphene.ID(), status=graphene.String())
+    paginated_active_events = graphene.Field(PaginatedEventResult, page=graphene.Int(), page_size=graphene.Int(), search=graphene.String())
+
     # resolvers
+
+    def resolve_me(self, info):
+        request = info.context
+        auth_header = request.META.get('HTTP_AUTHORIZATION', '')
+        token = None
+        if auth_header.startswith('JWT '):
+            token = auth_header[4:]
+        if not token:
+            return None
+        try:
+            payload = get_payload(token, request)
+            user = get_user_by_payload(payload)
+        except JSONWebTokenError:
+            return None
+        if not user or not user.is_active:
+            return None
+        return user
 
     def resolve_all_users(self, info):
         admin_required(info)
@@ -792,6 +931,82 @@ class Query(graphene.ObjectType):
 
     def resolve_active_events(self, info):
         return Event.objects.filter(is_active=True)
+
+    def resolve_paginated_categories(self, info, page=1, page_size=10, search=None):
+        admin_required(info)
+        qs = Category.objects.all().order_by('id')
+        if search:
+            qs = qs.filter(name__icontains=search)
+        paginator = Paginator(qs, page_size)
+        p = paginator.get_page(page)
+        return PaginatedCategoryResult(results=list(p), total_count=paginator.count, num_pages=paginator.num_pages, current_page=p.number)
+
+    def resolve_paginated_tags(self, info, page=1, page_size=10, search=None):
+        admin_required(info)
+        qs = EventTag.objects.all().order_by('id')
+        if search:
+            qs = qs.filter(name__icontains=search)
+        paginator = Paginator(qs, page_size)
+        p = paginator.get_page(page)
+        return PaginatedTagResult(results=list(p), total_count=paginator.count, num_pages=paginator.num_pages, current_page=p.number)
+
+    def resolve_paginated_countries(self, info, page=1, page_size=10, search=None):
+        admin_required(info)
+        qs = Country.objects.all().order_by('id')
+        if search:
+            qs = qs.filter(name__icontains=search)
+        paginator = Paginator(qs, page_size)
+        p = paginator.get_page(page)
+        return PaginatedCountryResult(results=list(p), total_count=paginator.count, num_pages=paginator.num_pages, current_page=p.number)
+
+    def resolve_paginated_states(self, info, page=1, page_size=10, search=None, country_id=None):
+        admin_required(info)
+        qs = State.objects.all().order_by('id')
+        if search:
+            qs = qs.filter(name__icontains=search)
+        if country_id:
+            qs = qs.filter(country_id=country_id)
+        paginator = Paginator(qs, page_size)
+        p = paginator.get_page(page)
+        return PaginatedStateResult(results=list(p), total_count=paginator.count, num_pages=paginator.num_pages, current_page=p.number)
+
+    def resolve_paginated_cities(self, info, page=1, page_size=10, search=None, state_id=None, country_id=None):
+        admin_required(info)
+        qs = City.objects.all().order_by('id')
+        if search:
+            qs = qs.filter(name__icontains=search)
+        if state_id:
+            qs = qs.filter(state_id=state_id)
+        elif country_id:
+            qs = qs.filter(state__country_id=country_id)
+        paginator = Paginator(qs, page_size)
+        p = paginator.get_page(page)
+        return PaginatedCityResult(results=list(p), total_count=paginator.count, num_pages=paginator.num_pages, current_page=p.number)
+
+    def resolve_paginated_active_events(self, info, page=1, page_size=10, search=None):
+        qs = Event.objects.filter(is_active=True).order_by('event_date')
+        if search:
+            qs = qs.filter(title__icontains=search)
+        paginator = Paginator(qs, page_size)
+        p = paginator.get_page(page)
+        return PaginatedEventResult(results=list(p), total_count=paginator.count, num_pages=paginator.num_pages, current_page=p.number)
+
+    def resolve_paginated_events(self, info, page=1, page_size=10, search=None, category_id=None, tag_id=None, status=None):
+        admin_required(info)
+        qs = Event.objects.all().order_by('id')
+        if search:
+            qs = qs.filter(title__icontains=search) | Event.objects.filter(slug__icontains=search)
+        if category_id:
+            qs = qs.filter(category__id=category_id)
+        if tag_id:
+            qs = qs.filter(tags__id=tag_id)
+        if status == 'active':
+            qs = qs.filter(is_active=True)
+        elif status == 'inactive':
+            qs = qs.filter(is_active=False)
+        paginator = Paginator(qs.distinct(), page_size)
+        p = paginator.get_page(page)
+        return PaginatedEventResult(results=list(p), total_count=paginator.count, num_pages=paginator.num_pages, current_page=p.number)
 
 
 schema = graphene.Schema(query=Query, mutation=Mutation)
