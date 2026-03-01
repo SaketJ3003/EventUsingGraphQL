@@ -1,3 +1,4 @@
+from django.shortcuts import render
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -20,7 +21,7 @@ class FeatureImageUploadView(APIView):
                 {'success': False, 'message': 'Event not found.'},
                 status=status.HTTP_404_NOT_FOUND
             )
-        print(request.FILES)
+
         if len(request.FILES.getlist('feature_image')) > 1:
             return Response(
                 {'success': False, 'message': 'Only one feature image is allowed.'},
@@ -112,3 +113,18 @@ class ExtraImagesUploadView(APIView):
             status=status.HTTP_201_CREATED
         )
     
+
+def login_page(request):
+    return render(request, 'event/login.html')
+
+
+def signup_page(request):
+    return render(request, 'event/signup.html')
+
+
+def event_list_page(request):
+    return render(request, 'event/event_list.html')
+
+
+def event_detail_page(request, slug):
+    return render(request, 'event/event_detail.html')
