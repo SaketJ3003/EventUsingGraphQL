@@ -363,11 +363,9 @@
                     query($page: Int, $pageSize: Int, $search: String, $categoryId: ID, $tagId: ID, $status: String) {
                         paginatedEvents(page: $page, pageSize: $pageSize, search: $search, categoryId: $categoryId, tagId: $tagId, status: $status) {
                             results {
-                                id title slug featureImage eventDate isActive viewsCount venue
-                                shortDescription longDescription startTime endTime
-                                city { name } state { name } country { name }
+                                id title slug featureImage eventDate isActive viewsCount
+                                city { name } state { name }
                                 category { name } tags { name }
-                                extraImages { image }
                             }
                             totalCount numPages currentPage
                         }
